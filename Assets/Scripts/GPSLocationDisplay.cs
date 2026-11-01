@@ -2,122 +2,151 @@ using System.Collections;
 using UnityEngine;
 using UnityEngine.UI;
 
-// Shows location and points the compass art toward a destination.
+// This script shows location and turns the compass dial toward a destination.
 public class GPSLocationDisplay : MonoBehaviour
 {
-    private const double TestLatitude = 12.9716;
-    private const double TestLongitude = 77.5946;
-    private const double TestDestinationLatitude = 12.9750;
-    private const double TestDestinationLongitude = 77.6050;
+    // Change these in the Inspector to choose a destination.
+    public double destinationLatitude = 12.9750;
+    public double destinationLongitude = 77.6050;
 
-    private Text statusText;
-    private Transform dialTransform;
-    private bool locationStarted;
-    private float simulatedHeading;
+    // These sample coordinates are used while testing in the Unity Editor.
+    public double testLatitude = 12.9716;
+    public double testLongitude = 77.5946;
+
+    private Text gpsText;
+    private Transform compassDial;
+    private bool gpsIsRunning;
 
     private IEnumerator Start()
     {
-        statusText = GetComponent<Text>();
-        Transform canvas = transform.parent;
-        Transform compass = canvas != null ? canvas.Find("CompassPanel") : null;
-        Transform dial = compass != null ? compass.Find("DialRing") : null;
-        dialTransform = dial;
+        // Find the text this script is attached to and the compass dial in the scene.
+        gpsText = GetComponent<Text>();
+        Transform compassPanel = null;
 
-        if (statusText == null || dialTransform == null)
+        if (transform.parent != null)
         {
-            Debug.LogError("Compass setup needs this Text and a CompassPanel/DialRing object.");
+            compassPanel = transform.parent.Find("CompassPanel");
+        }
+
+        if (compassPanel != null)
+        {
+            compassDial = compassPanel.Find("DialRing");
+        }
+
+        if (gpsText == null || compassDial == null)
+        {
+            Debug.LogError("This script needs a UI Text and a CompassPanel with a DialRing.");
             yield break;
         }
-        statusText.color = Color.white;
 
 #if UNITY_EDITOR
+        // In the Editor, spin a sample heading so the compass can be seen working.
+        float testHeading = 0f;
+
         while (true)
         {
-            simulatedHeading = Mathf.Repeat(simulatedHeading + 30f * Time.deltaTime, 360f);
-            float bearing = Bearing(TestLatitude, TestLongitude, TestDestinationLatitude, TestDestinationLongitude);
-            PointDial(bearing, simulatedHeading);
-            statusText.text = string.Format(
-                "Latitude & Longitude: {0:F5}, {1:F5}\nRotation: {2:0}°",
-                TestLatitude, TestLongitude, simulatedHeading);
+            testHeading = testHeading + 30f * Time.deltaTime;
+            if (testHeading >= 360f) testHeading -= 360f;
+
+            UpdateCompass(testLatitude, testLongitude, testHeading);
             yield return null;
         }
 #else
+        // On a phone, read the real GPS and compass sensors.
         if (!SystemInfo.supportsLocationService)
         {
-            statusText.text = "Latitude & Longitude: unavailable\nRotation: unavailable";
+            ShowUnavailable();
             yield break;
         }
 
         Input.compass.enabled = true;
-        statusText.text = "Latitude & Longitude: waiting...\nRotation: waiting...";
         Input.location.Start(10f, 10f);
-        locationStarted = true;
+        gpsIsRunning = true;
 
-        int secondsLeft = 30;
-        while (Input.location.status == LocationServiceStatus.Initializing && secondsLeft > 0)
+        // Wait up to 30 seconds for GPS to start.
+        int secondsWaited = 0;
+        while (Input.location.status == LocationServiceStatus.Initializing && secondsWaited < 30)
         {
-            statusText.text = "Latitude & Longitude: waiting...\nRotation: waiting...";
             yield return new WaitForSeconds(1f);
-            secondsLeft--;
+            secondsWaited++;
         }
 
         if (Input.location.status != LocationServiceStatus.Running)
         {
-            Input.location.Stop();
-            locationStarted = false;
-            statusText.text = "Latitude & Longitude: unavailable\nRotation: unavailable";
-            Debug.LogWarning("GPS did not start. Check device permission and Location setting.");
+            StopSensors();
+            ShowUnavailable();
             yield break;
         }
 
+        // Keep updating the display while GPS is running.
         while (Input.location.status == LocationServiceStatus.Running)
         {
-            LocationInfo location = Input.location.lastData;
-            float heading = Input.compass.trueHeading;
-            if (heading < 0f)
-                heading = Input.compass.magneticHeading;
+            LocationInfo phoneLocation = Input.location.lastData;
+            float phoneHeading = Input.compass.trueHeading;
 
-            float bearing = Bearing(location.latitude, location.longitude,
-                TestDestinationLatitude, TestDestinationLongitude);
-            PointDial(bearing, heading);
-            statusText.text = string.Format(
-                "Latitude & Longitude: {0:F5}, {1:F5}\nRotation: {2:0}°",
-                location.latitude, location.longitude, heading);
+            // Use magnetic heading if true heading is not available.
+            if (phoneHeading < 0f) phoneHeading = Input.compass.magneticHeading;
+
+            UpdateCompass(phoneLocation.latitude, phoneLocation.longitude, phoneHeading);
             yield return new WaitForSeconds(0.2f);
         }
 
-        Input.location.Stop();
-        locationStarted = false;
-        statusText.text = "Latitude & Longitude: unavailable\nRotation: unavailable";
+        StopSensors();
+        ShowUnavailable();
 #endif
     }
 
-    private void PointDial(float bearing, float heading)
+    // Update the numbers and point the dial toward the destination.
+    private void UpdateCompass(double latitude, double longitude, float heading)
     {
-        // The compass needle is part of the dial picture, so rotate that picture toward the target.
-        float angle = Mathf.DeltaAngle(heading, bearing);
-        dialTransform.localRotation = Quaternion.Euler(0f, 0f, -angle);
+        float targetDirection = FindBearing(latitude, longitude,
+            destinationLatitude, destinationLongitude);
+
+        float turnToTarget = Mathf.DeltaAngle(heading, targetDirection);
+        compassDial.localRotation = Quaternion.Euler(0f, 0f, -turnToTarget);
+
+        gpsText.text = string.Format(
+            "Latitude & Longitude: {0:F5}, {1:F5}\nRotation: {2:0}°",
+            latitude, longitude, heading);
     }
 
-    private static float Bearing(double fromLatitude, double fromLongitude,
+    // Show this when the phone cannot provide a GPS location.
+    private void ShowUnavailable()
+    {
+        gpsText.text = "Latitude & Longitude: unavailable\nRotation: unavailable";
+    }
+
+    // Work out the compass direction from the current location to the destination.
+    private static float FindBearing(double fromLatitude, double fromLongitude,
         double toLatitude, double toLongitude)
     {
-        double fromLat = fromLatitude * Mathf.Deg2Rad;
-        double toLat = toLatitude * Mathf.Deg2Rad;
-        double deltaLongitude = (toLongitude - fromLongitude) * Mathf.Deg2Rad;
-        double y = System.Math.Sin(deltaLongitude) * System.Math.Cos(toLat);
-        double x = System.Math.Cos(fromLat) * System.Math.Sin(toLat)
-            - System.Math.Sin(fromLat) * System.Math.Cos(toLat) * System.Math.Cos(deltaLongitude);
-        return Mathf.Repeat((float)(System.Math.Atan2(y, x) * Mathf.Rad2Deg), 360f);
+        double startLatitude = fromLatitude * Mathf.Deg2Rad;
+        double endLatitude = toLatitude * Mathf.Deg2Rad;
+        double longitudeDifference = (toLongitude - fromLongitude) * Mathf.Deg2Rad;
+
+        double y = System.Math.Sin(longitudeDifference) * System.Math.Cos(endLatitude);
+        double x = System.Math.Cos(startLatitude) * System.Math.Sin(endLatitude)
+            - System.Math.Sin(startLatitude) * System.Math.Cos(endLatitude)
+            * System.Math.Cos(longitudeDifference);
+
+        double angle = System.Math.Atan2(y, x) * Mathf.Rad2Deg;
+        return Mathf.Repeat((float)angle, 360f);
     }
 
+    // Stop the phone sensors when this object is turned off.
     private void OnDisable()
     {
-        if (locationStarted)
+        StopSensors();
+    }
+
+    private void StopSensors()
+    {
+        if (gpsIsRunning)
         {
             Input.location.Stop();
-            locationStarted = false;
+            gpsIsRunning = false;
         }
+
         Input.compass.enabled = false;
     }
 }
