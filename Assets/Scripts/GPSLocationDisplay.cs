@@ -10,7 +10,6 @@ public class GPSLocationDisplay : MonoBehaviour
     void Start()
     {
         Input.compass.enabled = true;
-        Input.location.Start();
     }
 
     void Update()
