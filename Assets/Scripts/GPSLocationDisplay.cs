@@ -5,23 +5,50 @@ public class GPSLocationDisplay : MonoBehaviour
 {
     public Text gpsText;
     public Transform compassDial;
-    float smooth;
+    [Range(1f, 25f)] public float smoothingSpeed = 10f;
+    
+    // Define 'smoothHeading' here so it exists in context
+    float smoothHeading;
 
     void Start()
     {
         Input.compass.enabled = true;
+        if (!Input.location.isEnabledByUser)
+        {
+            Debug.LogWarning("Location service is not enabled on this device.");
+        }
+        else if (Input.location.status == LocationServiceStatus.Stopped)
+        {
+            Input.location.Start(5f, 1f);
+        }
     }
 
     void Update()
     {
-        float heading = Input.compass.magneticHeading;
-        smooth = Mathf.LerpAngle(smooth, heading, 10f * Time.deltaTime);
-        compassDial.localRotation = Quaternion.Euler(0, 0, smooth);
+        // Smooth compass rotation (using -smoothHeading to fix East/West reversal)
+        float heading = Input.compass.trueHeading >= 0 ? Input.compass.trueHeading : Input.compass.magneticHeading;
+        smoothHeading = Mathf.LerpAngle(smoothHeading, heading, smoothingSpeed * Time.deltaTime);
+        
+        if (compassDial != null)
+        {
+            compassDial.localRotation = Quaternion.Euler(0, 0, smoothHeading);
+        }
 
-        string place = "waiting for GPS";
+        // Location text display
+        string place = "Waiting for GPS...";
         if (Input.location.status == LocationServiceStatus.Running)
-            place = Input.location.lastData.latitude + ", " + Input.location.lastData.longitude;
+        {
+            LocationInfo location = Input.location.lastData;
+            place = $"{location.latitude:F6}, {location.longitude:F6} (±{location.horizontalAccuracy:F0}m)";
+        }
+        else
+        {
+            place = $"GPS Status: {Input.location.status}";
+        }
 
-        gpsText.text = "Latitude & Longitude: " + place + "\nRotation: " + (int)heading + "°";
+        if (gpsText != null)
+        {
+            gpsText.text = $"Location: {place}\nHeading: {(int)heading}°";
+        }
     }
 }
